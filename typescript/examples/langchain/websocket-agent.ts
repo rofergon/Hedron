@@ -19,7 +19,7 @@ const FORCE_CLEAR_MEMORY = process.env.FORCE_CLEAR_MEMORY === 'true';
 // Enhanced LLM Configuration Constants
 const MAX_TOKENS = parseInt(process.env.LLM_MAX_TOKENS || '12000');
 const TEMPERATURE = parseFloat(process.env.LLM_TEMPERATURE || '0.7');
-const MODEL_NAME = process.env.LLM_MODEL || 'gpt-5-mini';
+const MODEL_NAME = process.env.LLM_MODEL || 'gpt-4o-mini';
 
 // Memory Configuration Constants
 const MEMORY_MAX_TOKEN_LIMIT = parseInt(process.env.MEMORY_MAX_TOKEN_LIMIT || '8000');
@@ -74,7 +74,7 @@ class HederaWebSocketAgent {
     this.llm = new ChatOpenAI({
       model: MODEL_NAME,
       temperature: TEMPERATURE,
-      maxCompletionTokens: MAX_TOKENS,
+      maxTokens: MAX_TOKENS, // Will try original parameter with older LangChain version
       streaming: false, // Disable streaming for better token management
       // Increase context window and optimize for longer conversations
       modelKwargs: {

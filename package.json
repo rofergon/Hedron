@@ -20,11 +20,16 @@
     "ethers": "^6.13.0",
     "langchain": "^0.3.30",
     "prompts": "^2.4.2",
-    "ws": "^8.18.3",
     "ts-node": "^10.9.2",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "ws": "^8.18.3"
   },
-  "keywords": ["hedera", "websocket", "agent", "blockchain"],
+  "keywords": [
+    "hedera",
+    "websocket",
+    "agent",
+    "blockchain"
+  ],
   "author": "Hedron Team",
   "license": "Apache-2.0"
 }
