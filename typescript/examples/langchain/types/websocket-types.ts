@@ -1,5 +1,5 @@
-import { AgentExecutor } from 'langchain/agents';
-import { BufferMemory } from 'langchain/memory';
+import { CompiledStateGraph, StateGraph } from '@langchain/langgraph';
+import { BaseCheckpointSaver, MemorySaver } from '@langchain/langgraph';
 import WebSocket from 'ws';
 
 // WebSocket message types
@@ -81,8 +81,9 @@ export interface PendingStep {
 export interface UserConnection {
   ws: WebSocket;
   userAccountId: string;
-  agentExecutor: AgentExecutor;
-  memory: BufferMemory;
+  agent: CompiledStateGraph<any, any, any>;
+  checkpointer: BaseCheckpointSaver;
+  threadId: string;
   pendingStep?: PendingStep; // Track multi-step flows
   // Track the last prepared operation context to emit a final summary upon confirmation
   lastPreparedOperation?: {
