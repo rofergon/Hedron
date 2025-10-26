@@ -2,8 +2,8 @@ import WebSocket from 'ws';
 import { Client } from '@hashgraph/sdk';
 import { ChatOpenAI } from '@langchain/openai';
 import { ChatPromptTemplate } from '@langchain/core/prompts';
-import { AgentExecutor, createToolCallingAgent } from 'langchain/agents';
-import { BufferMemory } from 'langchain/memory';
+import { createReactAgent } from '@langchain/langgraph/prebuilt';
+import { MemorySaver } from '@langchain/langgraph';
 import { HederaLangchainToolkit, AgentMode, hederaTools } from 'hedera-agent-kit';
 import { UserConnection } from '../types/websocket-types';
 
@@ -92,9 +92,6 @@ export class ConnectionManager {
       },
     });
 
-    // Prompt template
-    const prompt = this.createPromptTemplate(userAccountId);
-
     // Get tools from Hedera toolkit
     const hederaToolsList = hederaAgentToolkit.getTools();
     
@@ -104,51 +101,32 @@ export class ConnectionManager {
     // Combine all tools
     const tools = [...hederaToolsList, ...defiTools];
 
-    // Create agent
-    const agent = createToolCallingAgent({
+    // 🧠 Create checkpointer for memory management
+    console.log(`🧠 Creating ENHANCED memory with LangGraph checkpointer for user: ${userAccountId}`);
+    const checkpointer = new MemorySaver();
+    
+    // Generate unique thread ID for this user connection
+    const threadId = `user-${userAccountId}-${Date.now()}`;
+    console.log(`🔗 Thread ID created: ${threadId}`);
+
+    // Create system message with user context
+    const systemMessage = this.createSystemMessage(userAccountId);
+
+    // 🚀 Create LangGraph ReAct agent with memory
+    const agent = createReactAgent({
       llm,
       tools,
-      prompt,
-    });
-
-    // 🧠 Create ENHANCED memory instance for this connection with token management
-    console.log(`🧠 Creating ENHANCED memory for user: ${userAccountId}`);
-    console.log(`   - Max Token Limit: ${this.memoryConfig.maxTokenLimit}`);
-    console.log(`   - Return Max Tokens: ${this.memoryConfig.returnMaxTokens}`);
-    
-    const memory = new BufferMemory({
-      memoryKey: 'chat_history',
-      inputKey: 'input',
-      outputKey: 'output',
-      returnMessages: true,
-      // Enhanced memory configuration for better context management
-      aiPrefix: 'Assistant',
-      humanPrefix: 'Human',
-      // Optional: We could implement custom processing here later
-    });
-
-    // 🧹 Ensure memory is completely clean for new connections
-    await memory.clear();
-    console.log(`✅ Memory cleared for user: ${userAccountId}`);
-
-    // Enhanced AgentExecutor configuration for this user
-    const agentExecutor = new AgentExecutor({
-      agent,
-      tools,
-      memory,
-      returnIntermediateSteps: true,
-      // Enhanced execution configuration
-      maxIterations: 10, // Prevent infinite loops while allowing complex workflows
-      // Improved error handling
-      handleParsingErrors: true,
+      checkpointSaver: checkpointer,
+      messageModifier: systemMessage,
     });
 
     console.log(`✅ User connection created successfully for: ${userAccountId}`);
     return {
       ws,
       userAccountId,
-      agentExecutor,
-      memory,
+      agent,
+      checkpointer,
+      threadId,
     };
   }
 
@@ -183,16 +161,15 @@ export class ConnectionManager {
       console.log(`🧹 Cleaning up connection for user: ${userConnection.userAccountId}`);
       
       try {
-        // Clear memory explicitly to prevent leaks
-        await userConnection.memory.clear();
-        console.log(`✅ Memory cleared for user: ${userConnection.userAccountId}`);
-        
         // Clear any pending steps
         userConnection.pendingStep = undefined;
         console.log(`✅ Pending steps cleared for user: ${userConnection.userAccountId}`);
         
+        // Note: LangGraph's MemorySaver handles cleanup automatically
+        console.log(`✅ Memory cleanup handled by LangGraph checkpointer`);
+        
       } catch (error: any) {
-        console.error('⚠️ Error during memory cleanup:', error);
+        console.error('⚠️ Error during cleanup:', error);
       }
     }
     
@@ -241,11 +218,10 @@ export class ConnectionManager {
   }
 
   /**
-   * Create the agent prompt template
+   * Create the system message for the agent
    */
-  private createPromptTemplate(userAccountId: string): ChatPromptTemplate {
-    return ChatPromptTemplate.fromMessages([
-      ['system', `You are a helpful ::HEDERA:: blockchain assistant with comprehensive DeFi capabilities.
+  private createSystemMessage(userAccountId: string): string {
+    return `You are a helpful ::HEDERA:: blockchain assistant with comprehensive DeFi capabilities.
 
 **CORE CAPABILITIES:**
 - ::HEDERA:: Hedera Native Operations (HTS, HCS, transfers, queries)
@@ -769,10 +745,6 @@ Remember: The user can see conversation history. Don't repeat what they already 
 
 **STATISTICS CRITICAL**: When providing statistics, NEVER put 📊 in the main title. Format as: "## ::PLATFORM:: Platform Name" then "📊 **General Statistics:**" as subtitle.
 
-Current user account: ${userAccountId}`,],
-      ['placeholder', '{chat_history}'],
-      ['human', '{input}'],
-      ['placeholder', '{agent_scratchpad}'],
-    ]);
+Current user account: ${userAccountId}`;
   }
 }
