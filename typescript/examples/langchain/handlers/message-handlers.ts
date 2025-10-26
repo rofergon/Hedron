@@ -89,28 +89,32 @@ export class MessageHandlers {
 
       const currentConnection = this.connectionManager.getConnection(ws)!;
       
-      // 🧠 MVP: Debug memory state before processing
+      // 🧠 LangGraph: Memory is handled automatically through checkpointer
       console.log(`🧠 Processing message for user: ${currentConnection.userAccountId}`);
-      try {
-        const memoryVariables = await currentConnection.memory.loadMemoryVariables({});
-        console.log(`📝 Current memory length: ${memoryVariables.chat_history?.length || 0} messages`);
-        
-        // 🧠 MVP: Force clear memory on each message if flag is set (for debugging memory issues)
-        if (this.forceClearMemory) {
-          console.log('🧹 FORCE_CLEAR_MEMORY enabled - clearing memory before processing');
-          await currentConnection.memory.clear();
-        }
-      } catch (error) {
-        console.error('⚠️ Error reading memory state:', error);
+      console.log(`🔗 Using thread ID: ${currentConnection.threadId}`);
+      
+      // 🧠 MVP: Force clear memory on each message if flag is set (for debugging memory issues)
+      // Note: With LangGraph, we would need to clear the entire thread, which we skip for now
+      if (this.forceClearMemory) {
+        console.log('🧹 FORCE_CLEAR_MEMORY enabled - Note: Full thread clearing not implemented yet');
       }
       
       // Pre-route: detect limit order intent to avoid swap tools misuse
       const routedInput = this.applyLimitOrderRoutingHints(message.message);
 
-      // Process message with user agent
-      const response = await currentConnection.agentExecutor.invoke({ input: routedInput });
+      // Process message with LangGraph agent
+      // Pass the thread ID for conversation continuity
+      const response = await currentConnection.agent.invoke(
+        { messages: [{ role: 'user', content: routedInput }] },
+        { configurable: { thread_id: currentConnection.threadId } }
+      );
       
-      console.log('🤖 Agent:', response?.output ?? response);
+      // Extract the final AI message
+      const messages = (response.messages || []) as any[];
+      const lastMessage = messages[messages.length - 1];
+      const outputText = lastMessage?.content || JSON.stringify(response);
+      
+      console.log('🤖 Agent:', outputText);
 
       // Extract transaction bytes if they exist
       const bytes = AgentResponseUtils.extractBytesFromAgentResponse(response);
@@ -153,7 +157,7 @@ export class MessageHandlers {
         
         // Send agent response and transaction
         this.sendMessage(ws, this.createMessage('AGENT_RESPONSE', {
-          message: response?.output ?? response,
+          message: outputText,
           hasTransaction: true
         }));
         this.sendMessage(ws, this.createMessage('TRANSACTION_TO_SIGN', {
@@ -163,7 +167,7 @@ export class MessageHandlers {
       } else {
         // Only agent response, no transaction
         this.sendMessage(ws, this.createMessage('AGENT_RESPONSE', {
-          message: response?.output ?? response,
+          message: outputText,
           hasTransaction: false
         }));
       }
@@ -306,12 +310,18 @@ export class MessageHandlers {
       // Clear the pending step before execution to avoid loops
       userConnection.pendingStep = undefined;
 
-      // Execute the next step through the agent
-      const response = await userConnection.agentExecutor.invoke({ 
-        input: nextStepMessage 
-      });
+      // Execute the next step through the agent with LangGraph
+      const response = await userConnection.agent.invoke(
+        { messages: [{ role: 'user', content: nextStepMessage }] },
+        { configurable: { thread_id: userConnection.threadId } }
+      );
 
-      console.log('🤖 Agent (Next Step):', response?.output ?? response);
+      // Extract the final AI message
+      const messages = (response.messages || []) as any[];
+      const lastMessage = messages[messages.length - 1];
+      const outputText = lastMessage?.content || JSON.stringify(response);
+      
+      console.log('🤖 Agent (Next Step):', outputText);
 
       // Extract transaction bytes for the next step
       const bytes = AgentResponseUtils.extractBytesFromAgentResponse(response);
@@ -329,7 +339,7 @@ export class MessageHandlers {
 
         // Send agent response and transaction
         this.sendMessage(ws, this.createMessage('AGENT_RESPONSE', {
-          message: response?.output ?? response,
+          message: outputText,
           hasTransaction: true
         }));
         this.sendMessage(ws, this.createMessage('TRANSACTION_TO_SIGN', {
@@ -339,7 +349,7 @@ export class MessageHandlers {
       } else {
         // Only agent response, flow completed
         this.sendMessage(ws, this.createMessage('AGENT_RESPONSE', {
-          message: response?.output ?? response,
+          message: outputText,
           hasTransaction: false
         }));
       }
