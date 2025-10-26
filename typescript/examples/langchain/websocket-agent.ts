@@ -74,7 +74,7 @@ class HederaWebSocketAgent {
     this.llm = new ChatOpenAI({
       model: MODEL_NAME,
       temperature: TEMPERATURE,
-      maxTokens: MAX_TOKENS,
+      maxCompletionTokens: MAX_TOKENS,
       streaming: false, // Disable streaming for better token management
       // Increase context window and optimize for longer conversations
       modelKwargs: {
