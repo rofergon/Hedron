@@ -4,8 +4,21 @@ import type { Tool } from '../../../tools';
 import { PromptGenerator } from '../../../utils/prompt-generator';
 
 // Bonzo Finance API configuration
+// NOTE: Bonzo API only provides MAINNET data. It works regardless of network,
+// but always returns mainnet market information and contract addresses.
+const resolveBaseUrl = () => {
+  const envOverride = process.env.BONZO_API_BASE_URL?.trim();
+  if (envOverride) {
+    return envOverride.replace(/\/$/, ''); // ensure no trailing slash
+  }
+  // Temporary staging endpoint per Bonzo docs (Nov 2025)
+  return 'https://mainnet-data-staging.bonzo.finance';
+};
+
 export const BONZO_API_CONFIG = {
-  BASE_URL: 'https://bonzo-data-api-eceac9d8a2aa.herokuapp.com',
+  // Bonzo Finance temporary staging API (mainnet data only)
+  BASE_URL: resolveBaseUrl(),
+  // Original production URL (keep note for future revert): https://data.bonzo.finance
   ENDPOINTS: {
     ACCOUNT_DASHBOARD: '/dashboard',
     MARKET_INFO: '/market',
@@ -14,17 +27,20 @@ export const BONZO_API_CONFIG = {
     BONZO_TOKEN: '/bonzo',
     BONZO_CIRCULATION: '/bonzo/circulation',
   },
-  // Rate limiting configuration
+  // Rate limiting configuration - tuned to be more conservative to avoid IP blocks
   RATE_LIMIT: {
-    DELAY_MS: 1000,     // 1 second between requests
-    MAX_RETRIES: 3,     // Maximum retry attempts
-    BACKOFF_MS: 2000,   // Initial backoff delay
-    CACHE_TTL_MS: 30000 // Cache responses for 30 seconds
+    DELAY_MS: 2000,     // 2 seconds between requests (increase to reduce burstiness)
+    MAX_RETRIES: 2,     // Fewer retry attempts to avoid rapid retries
+    BACKOFF_MS: 5000,   // Initial backoff delay (5s)
+    CACHE_TTL_MS: 300000 // Cache responses for 5 minutes
   }
 } as const;
 
 // Simple cache to avoid duplicate requests
 const apiCache = new Map<string, { data: any; timestamp: number }>();
+
+// Track inflight requests to deduplicate parallel calls to the same URL
+const inflightRequests = new Map<string, Promise<Response>>();
 
 // Track last request time for rate limiting
 let lastRequestTime = 0;
@@ -77,62 +93,83 @@ const fetchWithRetry = async (url: string, maxRetries = BONZO_API_CONFIG.RATE_LI
     'Sec-Fetch-Site': 'cross-site'
   };
 
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      console.log(`🌐 Bonzo API request (attempt ${attempt + 1}/${maxRetries + 1}): ${url}`);
-      
-      const response = await fetch(url, {
-        method: 'GET',
-        headers,
-        // Add timeout to prevent hanging requests
-        signal: AbortSignal.timeout(10000) // 10 second timeout
-      });
-
-      // If successful, return response
-      if (response.ok) {
-        console.log(`✅ Bonzo API request successful on attempt ${attempt + 1}`);
-        return response;
-      }
-
-      // Handle specific error codes
-      if (response.status === 403) {
-        console.log(`🚫 403 Forbidden (attempt ${attempt + 1}). Rate limited.`);
-        if (attempt < maxRetries) {
-          const backoffDelay = BONZO_API_CONFIG.RATE_LIMIT.BACKOFF_MS * Math.pow(2, attempt);
-          console.log(`⏰ Backing off for ${backoffDelay}ms before retry...`);
-          await sleep(backoffDelay);
-          continue;
-        }
-      }
-
-      if (response.status === 429) {
-        console.log(`⏳ 429 Too Many Requests (attempt ${attempt + 1})`);
-        if (attempt < maxRetries) {
-          const backoffDelay = BONZO_API_CONFIG.RATE_LIMIT.BACKOFF_MS * Math.pow(2, attempt);
-          console.log(`⏰ Backing off for ${backoffDelay}ms before retry...`);
-          await sleep(backoffDelay);
-          continue;
-        }
-      }
-
-      // For other errors, throw immediately
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-
-    } catch (error) {
-      console.log(`❌ Request failed (attempt ${attempt + 1}):`, error);
-      
-      if (attempt === maxRetries) {
-        throw error;
-      }
-      
-      // Wait before retry
-      const backoffDelay = BONZO_API_CONFIG.RATE_LIMIT.BACKOFF_MS * Math.pow(2, attempt);
-      console.log(`⏰ Retrying in ${backoffDelay}ms...`);
-      await sleep(backoffDelay);
-    }
+  // Deduplicate parallel requests to the same URL
+  if (inflightRequests.has(url)) {
+    console.log(`🔁 Waiting for in-flight request for ${url}`);
+    return inflightRequests.get(url)!;
   }
 
-  throw new Error('Max retries exceeded');
+  // Wrapper promise so we can register it in inflightRequests and remove it later
+  const fetchPromise = (async () => {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`🌐 Bonzo API request (attempt ${attempt + 1}/${maxRetries + 1}): ${url}`);
+
+        const response = await fetch(url, {
+          method: 'GET',
+          headers,
+          // Add timeout to prevent hanging requests
+          signal: AbortSignal.timeout(10000) // 10 second timeout
+        });
+
+        // If successful, return response
+        if (response.ok) {
+          console.log(`✅ Bonzo API request successful on attempt ${attempt + 1}`);
+          return response;
+        }
+
+        // Handle specific error codes
+        if (response.status === 403) {
+          console.log(`🚫 403 Forbidden (attempt ${attempt + 1}). Rate limited.`);
+          if (attempt < maxRetries) {
+            const backoffDelay = BONZO_API_CONFIG.RATE_LIMIT.BACKOFF_MS * Math.pow(2, attempt);
+            console.log(`⏰ Backing off for ${backoffDelay}ms before retry...`);
+            await sleep(backoffDelay);
+            continue;
+          }
+        }
+
+        if (response.status === 429) {
+          console.log(`⏳ 429 Too Many Requests (attempt ${attempt + 1})`);
+          if (attempt < maxRetries) {
+            const backoffDelay = BONZO_API_CONFIG.RATE_LIMIT.BACKOFF_MS * Math.pow(2, attempt);
+            console.log(`⏰ Backing off for ${backoffDelay}ms before retry...`);
+            await sleep(backoffDelay);
+            continue;
+          }
+        }
+
+        // For other errors, throw immediately
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+
+      } catch (error) {
+        console.log(`❌ Request failed (attempt ${attempt + 1}):`, error);
+
+        if (attempt === maxRetries) {
+          throw error;
+        }
+
+        // Wait before retry with exponential backoff + jitter
+        const baseDelay = BONZO_API_CONFIG.RATE_LIMIT.BACKOFF_MS * Math.pow(2, attempt);
+        const jitter = Math.floor(Math.random() * 1000); // up to 1s jitter
+        const backoffDelay = baseDelay + jitter;
+        console.log(`⏰ Retrying in ${backoffDelay}ms...`);
+        await sleep(backoffDelay);
+      }
+    }
+
+    throw new Error('Max retries exceeded');
+  })();
+
+  inflightRequests.set(url, fetchPromise);
+
+  try {
+    const resp = await fetchPromise;
+    return resp;
+  } finally {
+    // Always remove the inflight marker so subsequent requests can proceed
+    inflightRequests.delete(url);
+  }
 };
 
 // Available API operations
@@ -171,6 +208,8 @@ const getBonzoApiQueryPrompt = (context: Context = {}) => {
 ${contextSnippet}
 
 This tool allows you to query Bonzo Finance DeFi protocol using their official REST API to get real-time lending pool data, account information, and protocol statistics.
+
+⚠️ IMPORTANT: The Bonzo API only provides MAINNET data. Even when using testnet accounts, the API will return mainnet market information and contract addresses.
 
 Available operations:
 
@@ -223,6 +262,12 @@ export const getBonzoApiQuery = async (
 ) => {
   try {
     console.log('🔍 Bonzo API query started:', params);
+
+    // Log warning about mainnet-only API
+    const network = process.env.HEDERA_NETWORK || 'mainnet';
+    if (network === 'testnet') {
+      console.warn('⚠️  WARNING: Bonzo API only serves MAINNET data. You are querying testnet but will receive mainnet market info.');
+    }
 
     // Clean expired cache entries
     clearExpiredCache();
