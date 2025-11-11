@@ -18,8 +18,9 @@ const FORCE_CLEAR_MEMORY = process.env.FORCE_CLEAR_MEMORY === 'true';
 
 // Enhanced LLM Configuration Constants
 const MAX_TOKENS = parseInt(process.env.LLM_MAX_TOKENS || '12000');
-const TEMPERATURE = parseFloat(process.env.LLM_TEMPERATURE || '0.7');
-const MODEL_NAME = process.env.LLM_MODEL || 'gpt-4o-mini';
+const MODEL_NAME = process.env.LLM_MODEL || 'gpt-5-mini';
+// GPT-5 models only support temperature=1 (default), so we use 1 for GPT-5 models
+const TEMPERATURE = MODEL_NAME.startsWith('gpt-5') ? 1 : parseFloat(process.env.LLM_TEMPERATURE || '0.7');
 
 // Memory Configuration Constants
 const MEMORY_MAX_TOKEN_LIMIT = parseInt(process.env.MEMORY_MAX_TOKEN_LIMIT || '8000');
@@ -65,24 +66,32 @@ class HederaWebSocketAgent {
     console.log(`🤖 LLM Configuration:`);
     console.log(`   - Model: ${MODEL_NAME}`);
     console.log(`   - Max Tokens: ${MAX_TOKENS}`);
-    console.log(`   - Temperature: ${TEMPERATURE}`);
+    console.log(`   - Temperature: ${TEMPERATURE}${MODEL_NAME.startsWith('gpt-5') ? ' (auto-adjusted for GPT-5)' : ''}`);
+    if (MODEL_NAME.startsWith('gpt-5')) {
+      console.log(`   ⚠️  GPT-5 detected: Using simplified parameters (no top_p, frequency_penalty, presence_penalty)`);
+    }
     console.log(`🧠 Memory Configuration:`);
     console.log(`   - Max Token Limit: ${MEMORY_MAX_TOKEN_LIMIT}`);
     console.log(`   - Return Max Tokens: ${MEMORY_RETURN_MAX_TOKENS}`);
 
     // Enhanced OpenAI Configuration with increased context
+    // GPT-5 models have stricter parameter requirements
+    const isGPT5 = MODEL_NAME.startsWith('gpt-5');
+    
     this.llm = new ChatOpenAI({
       model: MODEL_NAME,
       temperature: TEMPERATURE,
-      maxTokens: MAX_TOKENS, // Will try original parameter with older LangChain version
+      maxTokens: MAX_TOKENS,
       streaming: false, // Disable streaming for better token management
-      // Increase context window and optimize for longer conversations
-      modelKwargs: {
-        // Additional model parameters for better context handling
-        top_p: 0.9,
-        frequency_penalty: 0.1,
-        presence_penalty: 0.1,
-      },
+      // GPT-5 models don't support these additional parameters
+      ...(isGPT5 ? {} : {
+        modelKwargs: {
+          // Additional model parameters for better context handling (not supported in GPT-5)
+          top_p: 0.9,
+          frequency_penalty: 0.1,
+          presence_penalty: 0.1,
+        },
+      }),
     });
 
     // Hedera client for testnet (without operator, will be configured by user)
