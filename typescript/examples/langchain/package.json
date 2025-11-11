@@ -23,7 +23,8 @@
     "langchain": "^1.0.1",
     "openai": "^5.12.1",
     "prompts": "^2.4.2",
-    "ws": "^8.18.3"
+    "ws": "^8.18.3",
+    "zod": "^3.25.76"
   },
   "author": "",
   "license": "Apache-2.0",
